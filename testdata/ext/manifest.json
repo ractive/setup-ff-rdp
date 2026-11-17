@@ -1,0 +1,18 @@
+{
+  "manifest_version": 2,
+  "name": "setup-ff-rdp smoke",
+  "version": "1.0.0",
+  "description": "Marks every page it runs on, so a workflow can check it was installed.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "smoke@setup-ff-rdp.ractive.github.io"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

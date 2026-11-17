@@ -1,0 +1,130 @@
+name: smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Install ff-rdp with this action, then have it launch headless Firefox
+  # with a temporary add-on and read back what the add-on's content script
+  # wrote into a locally served page.
+  firefox:
+    name: firefox (${{ matrix.version }}, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        # v0.5.0 is the first release with `launch --temporary-addon`.
+        version: [latest, v0.5.0]
+    runs-on: ${{ matrix.os }}
+    env:
+      RDP_PORT: "6123"
+      HTTP_PORT: "8123"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install ff-rdp via setup-ff-rdp
+        id: ff-rdp
+        uses: ./
+        with:
+          version: ${{ matrix.version }}
+
+      - name: ff-rdp --version
+        shell: bash
+        run: ff-rdp --version
+
+      - name: Assert the provenance was verified
+        shell: bash
+        env:
+          # Pass through env, not direct ${{ }} interpolation into the script.
+          PROVENANCE: ${{ steps.ff-rdp.outputs.provenance }}
+          RESOLVED: ${{ steps.ff-rdp.outputs.version }}
+        run: |
+          echo "resolved=$RESOLVED provenance=$PROVENANCE (expected verified)"
+          [ "$PROVENANCE" = verified ]
+
+      # ff-rdp looks for Firefox in /Applications (macOS), Program Files
+      # (Windows) and on PATH. Install one only where the runner image has none.
+      - name: Look for a preinstalled Firefox
+        id: firefox
+        shell: bash
+        run: |
+          found=false
+          for p in "/Applications/Firefox.app/Contents/MacOS/firefox" \
+                   "/c/Program Files/Mozilla Firefox/firefox.exe"; do
+            [ -f "$p" ] && { echo "preinstalled: $p"; found=true; }
+          done
+          if [ "$found" = false ] && command -v firefox >/dev/null 2>&1; then
+            echo "preinstalled: $(command -v firefox)"
+            found=true
+          fi
+          [ "$found" = true ] || echo "no Firefox on this runner image"
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Install Firefox
+        if: steps.firefox.outputs.found != 'true'
+        uses: browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795 # v1.7.2
+        with:
+          firefox-version: latest
+
+      - name: Launch Firefox with the smoke add-on and check its content script ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          if python3 -c '' >/dev/null 2>&1; then py=python3; else py=python; fi
+          "$py" -m http.server "$HTTP_PORT" --bind 127.0.0.1 --directory testdata \
+            > "$RUNNER_TEMP/http.log" 2>&1 &
+          srv=$!
+          trap 'kill "$srv" 2>/dev/null || true' EXIT
+          url="http://127.0.0.1:${HTTP_PORT}/index.html"
+          curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null "$url"
+
+          ff-rdp launch --headless --temp-profile --port "$RDP_PORT" \
+            --temporary-addon testdata/ext "$url"
+          trap 'ff-rdp --port "$RDP_PORT" stop; kill "$srv" 2>/dev/null || true' EXIT
+          got="$(ff-rdp --port "$RDP_PORT" eval 'document.documentElement.dataset.smoke' --jq .results)"
+          echo "dataset.smoke=$got"
+          test "$got" = '"ok"'
+
+  # The exemption window: from v0.3.0 (attested-from) through v0.4.4
+  # (unattested-through) the musl archives carry no attestation. The arm
+  # runner installs musl (ff-rdp ships no aarch64 gnu build), so it must take
+  # the exempt path there and verify everywhere else. Install only: these
+  # releases predate `launch --temporary-addon`.
+  exemption:
+    name: exemption (${{ matrix.version }}, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        version: [v0.3.0, v0.4.4]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install ff-rdp via setup-ff-rdp
+        id: ff-rdp
+        uses: ./
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Assert which provenance path ran
+        shell: bash
+        env:
+          PROVENANCE: ${{ steps.ff-rdp.outputs.provenance }}
+          RESOLVED: ${{ steps.ff-rdp.outputs.version }}
+          OS: ${{ matrix.os }}
+        run: |
+          expected=verified
+          [ "$OS" = ubuntu-24.04-arm ] && expected=exempt
+          echo "resolved=$RESOLVED provenance=$PROVENANCE (expected $expected)"
+          [ "$PROVENANCE" = "$expected" ]
