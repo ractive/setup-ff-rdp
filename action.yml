@@ -1,0 +1,67 @@
+name: setup-ff-rdp
+description: Install the prebuilt ff-rdp CLI (drive Firefox from the command line over its Remote Debugging Protocol) on the runner and add it to PATH.
+author: ractive
+branding:
+  icon: terminal
+  color: orange
+
+inputs:
+  version:
+    description: >-
+      ff-rdp release to install. Use "latest" (default) to track the newest
+      release, or an explicit tag like "v0.5.0" to pin.
+    required: false
+    default: latest
+  github-token:
+    description: >-
+      Token used for GitHub release-asset API calls (raises the anonymous rate
+      limit) and for fetching the archive's build-provenance attestation.
+      Defaults to the workflow token.
+    required: false
+    default: ${{ github.token }}
+  verify-attestation:
+    description: >-
+      Verify the downloaded archive's GitHub build-provenance attestation with
+      `gh attestation verify` before installing it (default "true"). Fails the
+      step if the attestation is missing or doesn't verify. Set "false" only on
+      runners without the gh CLI; integrity then rests on SHA256SUMS alone,
+      which an attacker who can replace release assets can replace too.
+    required: false
+    default: "true"
+
+outputs:
+  version:
+    description: The resolved ff-rdp version tag that was installed (e.g. v0.5.0).
+    value: ${{ steps.install.outputs.version }}
+  provenance:
+    description: >-
+      How the installed binary's build provenance was established: "verified"
+      (attestation checked), "exempt" (a release/target that publishes no
+      attestation; SHA256SUMS only, with a warning) or "disabled"
+      (verify-attestation is false).
+    value: ${{ steps.install.outputs.provenance }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      uses: ractive/release-workflows/setup@d7439bdb0e54ad188aa818e2ba0f86b5d57a7cdc # v0.8.0
+      with:
+        repo: ractive/ff-rdp
+        version: ${{ inputs.version }}
+        github-token: ${{ inputs.github-token }}
+        verify-attestation: ${{ inputs.verify-attestation }}
+        # v0.1.0 and v0.2.0 use unversioned archive names and cannot be
+        # installed. From v0.3.0 the gnu, macOS and Windows archives are
+        # attested; the musl archives (cross-built) are attested from v0.5.0.
+        # The action takes musl only where no gnu build exists: aarch64 Linux.
+        # x86_64-unknown-linux-musl is not exempted although it is unattested
+        # too: it is never picked, and exempting it would let an edited
+        # SHA256SUMS (no gnu line) get an unverified musl archive installed.
+        attested-from: v0.3.0
+        unattested-targets: aarch64-unknown-linux-musl
+        unattested-through: v0.4.4
+
+    - name: Verify ff-rdp runs
+      shell: bash
+      run: ff-rdp --version
