@@ -45,7 +45,7 @@ runs:
   using: composite
   steps:
     - id: install
-      uses: ractive/release-workflows/setup@ceb81695b25058315c5e27ea0152febcc548a3cd # setup-action branch (pre-release, replaced by the release tag)
+      uses: ractive/release-workflows/setup@d7439bdb0e54ad188aa818e2ba0f86b5d57a7cdc # v0.8.0
       with:
         repo: ractive/ff-rdp
         version: ${{ inputs.version }}
