@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Weekly, so a new ff-rdp release, Firefox or runner image that breaks the
+  # `latest` jobs shows up without a push here.
+  schedule:
+    - cron: "17 5 * * 1"
 
 permissions:
   contents: read
@@ -22,6 +26,7 @@ jobs:
         # v0.5.0 is the first release with `launch --temporary-addon`.
         version: [latest, v0.5.0]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     env:
       RDP_PORT: "6123"
       HTTP_PORT: "8123"
@@ -76,13 +81,53 @@ jobs:
 
       - name: Launch Firefox with the smoke add-on and check its content script ran
         shell: bash
+        env:
+          FF_RDP_VERSION: ${{ steps.ff-rdp.outputs.version }}
         run: |
           set -euo pipefail
+          # `stop` must succeed, except on Windows with ff-rdp <= v0.5.0: there
+          # Firefox's launcher process (the PID ff-rdp started) hands over to a
+          # browser process with another PID, which then holds the port, so
+          # ff-rdp does not recognise it as its own (ractive/ff-rdp
+          # kb/backlog.md). Warn for those releases only, so a release that
+          # fixes it is held to a hard pass; the runner ends the job's
+          # processes anyway.
+          known_stop_bug() {
+            [ "$RUNNER_OS" = Windows ] || return 1
+            local major minor patch
+            IFS=. read -r major minor patch <<< "${FF_RDP_VERSION#v}"
+            [ "$major" -eq 0 ] && { [ "$minor" -lt 5 ] || { [ "$minor" -eq 5 ] && [ "$patch" -eq 0 ]; }; }
+          }
+          # Installed before anything starts, so whatever did start is cleaned
+          # up on every exit. Before `launch` has returned there is nothing
+          # this job owns for sure: stop quietly and keep the exit status.
+          srv=""
+          launched=false
+          cleanup() {
+            local rc=$?
+            if [ "$launched" = true ]; then
+              if ! ff-rdp --port "$RDP_PORT" stop; then
+                if known_stop_bug; then
+                  echo "::warning::ff-rdp ${FF_RDP_VERSION} stop did not stop Firefox on Windows (known ff-rdp bug: the browser process holding the port is not the launcher process ff-rdp started)"
+                else
+                  echo "::error::ff-rdp ${FF_RDP_VERSION} stop failed"
+                  rc=1
+                fi
+              fi
+            else
+              ff-rdp --port "$RDP_PORT" stop >/dev/null 2>&1 || true
+            fi
+            if [ -n "$srv" ]; then
+              kill "$srv" 2>/dev/null || true
+            fi
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
           if python3 -c '' >/dev/null 2>&1; then py=python3; else py=python; fi
           "$py" -m http.server "$HTTP_PORT" --bind 127.0.0.1 --directory testdata \
             > "$RUNNER_TEMP/http.log" 2>&1 &
           srv=$!
-          trap 'kill "$srv" 2>/dev/null || true' EXIT
           url="http://127.0.0.1:${HTTP_PORT}/index.html"
           curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null "$url"
 
@@ -90,27 +135,15 @@ jobs:
           # the default 30 s to open the debug port (run 44043005062).
           ff-rdp launch --headless --temp-profile --port "$RDP_PORT" --launch-timeout 90 \
             --temporary-addon testdata/ext "$url"
-          # `stop` must succeed on Linux and macOS. On Windows ff-rdp <= v0.5.0
-          # refuses: Firefox's launcher process (the PID ff-rdp started) hands
-          # over to a browser process with another PID, which then holds the
-          # port, so ff-rdp does not recognise it as its own (ractive/ff-rdp
-          # kb/backlog.md). Warn there; the runner ends the job's processes.
-          stop_firefox() {
-            local rc=$?
-            if ! ff-rdp --port "$RDP_PORT" stop; then
-              if [ "$RUNNER_OS" = Windows ]; then
-                echo "::warning::ff-rdp stop did not stop Firefox on Windows (known ff-rdp bug: the browser process holding the port is not the launcher process ff-rdp started)"
-              else
-                rc=1
-              fi
-            fi
-            kill "$srv" 2>/dev/null || true
-            exit "$rc"
-          }
-          trap stop_firefox EXIT
+          launched=true
           got="$(ff-rdp --port "$RDP_PORT" eval 'document.documentElement.dataset.smoke' --jq .results)"
           echo "dataset.smoke=$got"
           test "$got" = '"ok"'
+
+      - name: Show the test page server's log
+        if: failure()
+        shell: bash
+        run: cat "$RUNNER_TEMP/http.log" 2>/dev/null || echo "no http.log (the server never started)"
 
   # The exemption window: from v0.3.0 (attested-from) through v0.4.4
   # (unattested-through) the musl archives carry no attestation. The arm
@@ -125,6 +158,7 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
         version: [v0.3.0, v0.4.4]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
