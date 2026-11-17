@@ -42,6 +42,11 @@ jobs:
   load. Serve test pages over http yourself rather than depending on
   third-party sites.
 - `stop` also removes the temporary profile. Give parallel jobs different ports.
+- On Windows, `ff-rdp stop` (v0.5.0 and older) fails to stop the Firefox it
+  launched: Firefox's launcher process hands the debug port to a browser
+  process with another PID, which ff-rdp does not recognise as its own. The
+  hosted runner ends the job's processes anyway; tolerate the failure there
+  (see the smoke workflow's `stop_firefox`).
 
 [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) runs exactly this
 against [`testdata/`](testdata) on every runner below.
@@ -51,9 +56,18 @@ against [`testdata/`](testdata) on every runner below.
 ff-rdp looks for Firefox in `/Applications` (macOS), `Program Files`
 (Windows) and on `PATH`; this action does not install Firefox.
 
-__FIREFOX_TABLE__
+| Runner             | Firefox preinstalled | Found at |
+| ------------------ | -------------------- | -------- |
+| `ubuntu-latest`    | yes | `/usr/bin/firefox` |
+| `ubuntu-24.04-arm` | yes | `/usr/bin/firefox` |
+| `macos-latest`     | yes | `/Applications/Firefox.app` |
+| `windows-latest`   | yes | `C:\Program Files\Mozilla Firefox\firefox.exe` |
 
-Where it is missing, install it before `ff-rdp launch`, for example with
+All four GitHub-hosted runner images the smoke test runs on ship Firefox
+(checked 2026-11-17; the smoke workflow logs what it finds on each run), so
+none of them needs an install step.
+
+On a runner without it (a self-hosted runner, a container job, a slimmer image), install it before `ff-rdp launch`, for example with
 [`browser-actions/setup-firefox`](https://github.com/browser-actions/setup-firefox)
 (pin it by commit SHA):
 

@@ -88,7 +88,24 @@ jobs:
 
           ff-rdp launch --headless --temp-profile --port "$RDP_PORT" \
             --temporary-addon testdata/ext "$url"
-          trap 'ff-rdp --port "$RDP_PORT" stop; kill "$srv" 2>/dev/null || true' EXIT
+          # `stop` must succeed on Linux and macOS. On Windows ff-rdp <= v0.5.0
+          # refuses: Firefox's launcher process (the PID ff-rdp started) hands
+          # over to a browser process with another PID, which then holds the
+          # port, so ff-rdp does not recognise it as its own (ractive/ff-rdp
+          # kb/backlog.md). Warn there; the runner ends the job's processes.
+          stop_firefox() {
+            local rc=$?
+            if ! ff-rdp --port "$RDP_PORT" stop; then
+              if [ "$RUNNER_OS" = Windows ]; then
+                echo "::warning::ff-rdp stop did not stop Firefox on Windows (known ff-rdp bug: the browser process holding the port is not the launcher process ff-rdp started)"
+              else
+                rc=1
+              fi
+            fi
+            kill "$srv" 2>/dev/null || true
+            exit "$rc"
+          }
+          trap stop_firefox EXIT
           got="$(ff-rdp --port "$RDP_PORT" eval 'document.documentElement.dataset.smoke' --jq .results)"
           echo "dataset.smoke=$got"
           test "$got" = '"ok"'
