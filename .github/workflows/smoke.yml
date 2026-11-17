@@ -86,7 +86,9 @@ jobs:
           url="http://127.0.0.1:${HTTP_PORT}/index.html"
           curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null "$url"
 
-          ff-rdp launch --headless --temp-profile --port "$RDP_PORT" \
+          # A cold first Firefox start on ubuntu-24.04-arm once took longer than
+          # the default 30 s to open the debug port (run 44043005062).
+          ff-rdp launch --headless --temp-profile --port "$RDP_PORT" --launch-timeout 90 \
             --temporary-addon testdata/ext "$url"
           # `stop` must succeed on Linux and macOS. On Windows ff-rdp <= v0.5.0
           # refuses: Firefox's launcher process (the PID ff-rdp started) hands
