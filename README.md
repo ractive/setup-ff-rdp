@@ -29,9 +29,11 @@ jobs:
           set -euo pipefail
           python3 -m http.server 8080 --bind 127.0.0.1 --directory test/pages &
           curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null http://127.0.0.1:8080/fixture.html
-          ff-rdp launch --headless --temp-profile --port 6011 \
+          # On Windows `stop` fails (ff-rdp v0.5.0 and older, see below); a
+          # failing EXIT trap would fail the job under `set -e`.
+          trap 'ff-rdp --port 6011 stop || [ "$RUNNER_OS" = Windows ]' EXIT
+          ff-rdp launch --headless --temp-profile --port 6011 --launch-timeout 90 \
             --temporary-addon ./extension http://127.0.0.1:8080/fixture.html
-          trap 'ff-rdp --port 6011 stop' EXIT
           test "$(ff-rdp --port 6011 eval 'document.documentElement.dataset.myExt' --jq .results)" = '"ready"'
 ```
 
@@ -41,15 +43,21 @@ jobs:
   before the page opens, so `document_start` content scripts run on the first
   load. Serve test pages over http yourself rather than depending on
   third-party sites.
+- `--launch-timeout 90` gives a cold Firefox start more than the default
+  30 s to open its debug port; the arm Linux runner has needed it.
 - `stop` also removes the temporary profile. Give parallel jobs different ports.
 - On Windows, `ff-rdp stop` (v0.5.0 and older) fails to stop the Firefox it
   launched: Firefox's launcher process hands the debug port to a browser
-  process with another PID, which ff-rdp does not recognise as its own. The
-  hosted runner ends the job's processes anyway; tolerate the failure there
-  (see the smoke workflow's `stop_firefox`).
+  process with another PID, which ff-rdp does not recognise as its own
+  ([ractive/ff-rdp `kb/backlog.md`](https://github.com/ractive/ff-rdp/blob/main/kb/backlog.md)).
+  The hosted runner ends the job's processes anyway, so the trap above
+  tolerates the failure on Windows only. Under `set -e` a failing EXIT trap
+  fails the job.
 
-[`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) runs exactly this
-against [`testdata/`](testdata) on every runner below.
+[`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) runs this recipe
+against [`testdata/`](testdata) on every runner below, on every push and
+weekly. It differs in one way: there the Windows `stop` failure is tolerated
+only for ff-rdp v0.5.0 and older, so a release that fixes it must stop cleanly.
 
 ## Firefox on the runner
 
@@ -137,6 +145,10 @@ check only:
   v0.4.4**: the musl archives are cross-built, and those releases attest no
   cross-built archive. From v0.5.0 every archive is attested, so `latest`
   must verify on every runner.
+- **v0.1.0 and v0.2.0** fall before `attested-from: v0.3.0` and so would be
+  exempt, but they cannot be installed at all. Their archive names carry no
+  version (`ff-rdp-<target>.tar.gz`), so the action finds no archive for the
+  runner and fails.
 
 `gh` is preinstalled on all GitHub-hosted runners and uses `github-token`
 (the workflow token by default, no extra `permissions:` needed). On a
@@ -153,7 +165,7 @@ that marker satisfies the current run.
 reference a full commit SHA:
 
 ```yaml
-      - uses: ractive/setup-ff-rdp@<full-sha> # v1.0.0
+      - uses: ractive/setup-ff-rdp@<full-sha> # v1.0.1
 ```
 
 Pinning the **action** (`@v1` / SHA) is independent of pinning the **binary**

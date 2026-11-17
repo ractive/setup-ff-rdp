@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned actions (checkout, setup-firefox and
+  # ractive/release-workflows/setup) current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
