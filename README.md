@@ -29,9 +29,7 @@ jobs:
           set -euo pipefail
           python3 -m http.server 8080 --bind 127.0.0.1 --directory test/pages &
           curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null http://127.0.0.1:8080/fixture.html
-          # On Windows `stop` fails (ff-rdp v0.5.0 and older, see below); a
-          # failing EXIT trap would fail the job under `set -e`.
-          trap 'ff-rdp --port 6011 stop || [ "$RUNNER_OS" = Windows ]' EXIT
+          trap 'ff-rdp --port 6011 stop' EXIT
           ff-rdp launch --headless --temp-profile --port 6011 --launch-timeout 90 \
             --temporary-addon ./extension http://127.0.0.1:8080/fixture.html
           test "$(ff-rdp --port 6011 eval 'document.documentElement.dataset.myExt' --jq .results)" = '"ready"'
@@ -46,18 +44,17 @@ jobs:
 - `--launch-timeout 90` gives a cold Firefox start more than the default
   30 s to open its debug port; the arm Linux runner has needed it.
 - `stop` also removes the temporary profile. Give parallel jobs different ports.
-- On Windows, `ff-rdp stop` (v0.5.0 and older) fails to stop the Firefox it
-  launched: Firefox's launcher process hands the debug port to a browser
-  process with another PID, which ff-rdp does not recognise as its own
-  ([ractive/ff-rdp `kb/backlog.md`](https://github.com/ractive/ff-rdp/blob/main/kb/backlog.md)).
-  The hosted runner ends the job's processes anyway, so the trap above
-  tolerates the failure on Windows only. Under `set -e` a failing EXIT trap
-  fails the job.
+- On Windows, use ff-rdp v0.5.1 or later (`latest` is). Up to v0.5.0, `stop`
+  failed to stop the Firefox it launched: Firefox's launcher process hands the
+  debug port to a browser process with another PID. If you pin an older
+  version there, tolerate the failure in the trap:
+  `trap 'ff-rdp --port 6011 stop || [ "$RUNNER_OS" = Windows ]' EXIT`; under
+  `set -e` a failing EXIT trap fails the job.
 
 [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) runs this recipe
 against [`testdata/`](testdata) on every runner below, on every push and
-weekly. It differs in one way: there the Windows `stop` failure is tolerated
-only for ff-rdp v0.5.0 and older, so a release that fixes it must stop cleanly.
+weekly, with `latest` and a pinned v0.5.0. Only the v0.5.0 jobs tolerate the
+Windows `stop` failure; `latest` must stop cleanly.
 
 ## Firefox on the runner
 
@@ -89,7 +86,7 @@ On a runner without it (a self-hosted runner, a container job, a slimmer image),
 
 | Input                | Default               | Description |
 | -------------------- | --------------------- | ----------- |
-| `version`            | `latest`              | Release to install. `latest` tracks the newest release; pin a tag like `v0.5.0`. |
+| `version`            | `latest`              | Release to install. `latest` tracks the newest release; pin a tag like `v0.5.1`. |
 | `github-token`       | `${{ github.token }}` | Token for the release API (raises the anonymous rate limit) and the attestation lookup. |
 | `verify-attestation` | `true`                | Verify the archive's build-provenance attestation before installing. See [Verification](#verification). |
 
@@ -97,14 +94,14 @@ On a runner without it (a self-hosted runner, a container job, a slimmer image),
 
 | Output       | Description |
 | ------------ | ----------- |
-| `version`    | The resolved version tag that was installed (e.g. `v0.5.0`). |
+| `version`    | The resolved version tag that was installed (e.g. `v0.5.1`). |
 | `provenance` | `verified`, `exempt` (no attestation was published for this release/target; warned) or `disabled`. See [Verification](#verification). |
 
 ```yaml
       - uses: ractive/setup-ff-rdp@v1
         id: ff-rdp
         with:
-          version: v0.5.0
+          version: v0.5.1
       - run: echo "installed $VERSION"
         env:
           VERSION: ${{ steps.ff-rdp.outputs.version }}
